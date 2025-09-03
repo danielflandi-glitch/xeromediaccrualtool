@@ -267,7 +267,6 @@ app.post("/webhooks/xero", async (req: any, res) => {
       const campaignRef = inv.reference || "";
       if (!campaignRef) continue;
 
-      // Recode lines to Accrual Control (VAT remains on bill line)
       const newLines = (inv.lineItems || []).map((li: any) => ({
         description: li.description,
         quantity: li.quantity,
@@ -285,7 +284,6 @@ app.post("/webhooks/xero", async (req: any, res) => {
         });
       }
 
-      // Variance vs accrual
       const netBill = (newLines || []).reduce(
         (s: number, l: any) =>
           s + Number(l.unitAmount || 0) * Number(l.quantity || 1),
@@ -350,161 +348,141 @@ app.post("/webhooks/xero", async (req: any, res) => {
 });
 
 /** -----------------------------
- * Ultra-simple UI at /app
+ * Ultra-simple UI at /app (no backticks; safe join)
  * ------------------------------*/
-const appHtml = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Media Accrual Plug-in</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell; margin: 0; background: #0b1020; color: #e5e7eb; }
-    .wrap { max-width: 980px; margin: 24px auto; padding: 0 16px; }
-    .banner { background:#111827; border:1px solid #1f2937; padding:12px 16px; border-radius:12px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; }
-    a.btn, button.btn { background:#2563eb; color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; text-decoration:none; }
-    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .card { background:#111827; border:1px solid #1f2937; border-radius:12px; padding:16px; }
-    label { display:block; font-size:14px; margin:8px 0 4px; color:#cbd5e1; }
-    input, select, textarea { width:100%; padding:8px; border-radius:8px; border:1px solid #334155; background:#0f172a; color:#e5e7eb; }
-    .muted { color:#94a3b8; font-size:12px; }
-    .row { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-    .ok { color:#10b981; }
-    .err { color:#ef4444; }
-    pre { white-space: pre-wrap; word-wrap: break-word; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #334155; }
-    ul.logs { list-style:none; padding:0; margin:0; }
-    ul.logs li{ padding:6px 0; border-bottom:1px dashed #334155; }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="banner">
-      <div>
-        <strong>Media Accrual Plug-in</strong>
-        <div class="muted">Create sales + accruals. Bills recode via webhooks.</div>
-      </div>
-      <div>
-        <a class="btn" href="/connect">Connect to Xero</a>
-      </div>
-    </div>
+const appHtml = [
+  "<!doctype html>",
+  "<html>",
+  "<head>",
+  '  <meta charset="utf-8">',
+  "  <title>Media Accrual Plug-in</title>",
+  '  <meta name="viewport" content="width=device-width, initial-scale=1">',
+  "  <style>",
+  "    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell; margin: 0; background: #0b1020; color: #e5e7eb; }",
+  "    .wrap { max-width: 980px; margin: 24px auto; padding: 0 16px; }",
+  "    .banner { background:#111827; border:1px solid #1f2937; padding:12px 16px; border-radius:12px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; }",
+  "    a.btn, button.btn { background:#2563eb; color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; text-decoration:none; }",
+  "    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 16px; }",
+  "    .card { background:#111827; border:1px solid #1f2937; border-radius:12px; padding:16px; }",
+  "    label { display:block; font-size:14px; margin:8px 0 4px; color:#cbd5e1; }",
+  "    input, select, textarea { width:100%; padding:8px; border-radius:8px; border:1px solid #334155; background:#0f172a; color:#e5e7eb; }",
+  "    .muted { color:#94a3b8; font-size:12px; }",
+  "    .row { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }",
+  "    .ok { color:#10b981; }",
+  "    .err { color:#ef4444; }",
+  "    pre { white-space: pre-wrap; word-wrap: break-word; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #334155; }",
+  "    ul.logs { list-style:none; padding:0; margin:0; }",
+  "    ul.logs li{ padding:6px 0; border-bottom:1px dashed #334155; }",
+  "  </style>",
+  "</head>",
+  "<body>",
+  '  <div class="wrap">',
+  '    <div class="banner">',
+  "      <div>",
+  "        <strong>Media Accrual Plug-in</strong>",
+  '        <div class="muted">Create sales + accruals. Bills recode via webhooks.</div>',
+  "      </div>",
+  '      <div><a class="btn" href="/connect">Connect to Xero</a></div>',
+  "    </div>",
+  '    <div class="grid">',
+  '      <div class="card">',
+  "        <h3>Settings</h3>",
+  '        <form id="settings">',
+  '          <div class="row">',
+  "            <div><label>Revenue account code</label><input name=\"revenueCode\" required></div>",
+  "            <div><label>Media cost account code</label><input name=\"costCode\" required></div>",
+  "          </div>",
+  '          <div class="row">',
+  "            <div><label>Accrual control account code</label><input name=\"accrualCode\" required></div>",
+  "            <div><label>Sales VAT name (as in Xero)</label><input name=\"salesTaxName\" required></div>",
+  "          </div>",
+  '          <div style="margin:8px 0;">',
+  '            <label><input type="checkbox" name="autoApproveBills"> Auto-approve supplier bills after recoding</label>',
+  "          </div>",
+  '          <button class="btn" type="submit">Save settings</button>',
+  '          <div id="sOut" class="muted" style="margin-top:8px;"></div>',
+  "        </form>",
+  "      </div>",
+  '      <div class="card">',
+  "        <h3>Create Campaign</h3>",
+  '        <form id="campaign">',
+  '          <label>Client name</label><input name="clientContactName" placeholder="Acme Marketing" required>',
+  '          <label>Campaign ref (will also be used as bill Reference)</label><input name="campaignRef" placeholder="SEPT-PAID-SOCIAL" required>',
+  '          <div class="row">',
+  '            <div><label>Sale (net)</label><input name="saleNet" type="number" step="0.01" value="10000" required></div>',
+  '            <div><label>Expected cost (net)</label><input name="expectedCostNet" type="number" step="0.01" value="8000" required></div>',
+  "          </div>",
+  '          <div class="row">',
+  '            <div><label>Due date (YYYY-MM-DD)</label><input name="dueDate" placeholder="2025-09-30"></div>',
+  '            <div><label>Description</label><input name="description" placeholder="September social ads"></div>',
+  "          </div>",
+  '          <button class="btn" type="submit">Create campaign</button>',
+  '          <pre id="cOut" class="muted" style="margin-top:8px;"></pre>',
+  "        </form>",
+  '        <div class="muted" style="margin-top:8px;">',
+  "          Tip: when supplier bills arrive, put the same text in the <strong>Reference</strong> field (e.g. <em>SEPT-PAID-SOCIAL</em>). The plugin will recode and handle variances.",
+  "        </div>",
+  "      </div>",
+  "    </div>",
+  '    <div class="card" style="margin-top:16px;">',
+  "      <h3>Recent activity</h3>",
+  '      <ul class="logs" id="logs"></ul>',
+  "    </div>",
+  "  </div>",
+  "  <script>",
+  "    async function loadSettings(){",
+  "      const r = await fetch('/api/settings'); const s = await r.json();",
+  "      const f = document.getElementById('settings');",
+  "      f.querySelector('[name=\"revenueCode\"]').value = s.revenueCode;",
+  "      f.querySelector('[name=\"costCode\"]').value = s.costCode;",
+  "      f.querySelector('[name=\"accrualCode\"]').value = s.accrualCode;",
+  "      f.querySelector('[name=\"salesTaxName\"]').value = s.salesTaxName;",
+  "      f.querySelector('[name=\"autoApproveBills\"]').checked = !!s.autoApproveBills;",
+  "    }",
+  "    async function saveSettings(e){",
+  "      e.preventDefault();",
+  "      const fd = new FormData(e.target);",
+  "      const data = Object.fromEntries(fd.entries());",
+  "      data.autoApproveBills = String(fd.get('autoApproveBills') !== null);",
+  "      const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});",
+  "      document.getElementById('sOut').textContent = r.ok ? 'Settings saved.' : 'Save failed.';",
+  "      loadLogs();",
+  "    }",
+  "    async function createCampaign(e){",
+  "      e.preventDefault();",
+  "      const fd = new FormData(e.target);",
+  "      const data = Object.fromEntries(fd.entries());",
+  "      data.saleNet = Number(data.saleNet);",
+  "      data.expectedCostNet = Number(data.expectedCostNet);",
+  "      const r = await fetch('/campaigns',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});",
+  "      const txt = await r.text();",
+  "      document.getElementById('cOut').textContent = txt;",
+  "      loadLogs();",
+  "    }",
+  "    async function loadLogs(){",
+  "      const r = await fetch('/api/logs'); const items = await r.json();",
+  "      const ul = document.getElementById('logs'); ul.innerHTML='';",
+  "      for(const it of items){",
+  "        const li = document.createElement('li');",
+  "        li.innerHTML = '<span class=\"'+it.kind+'\">['+it.kind.toUpperCase()+']</span> '+new Date(it.ts).toLocaleString()+' — '+it.msg;",
+  "        ul.appendChild(li);",
+  "      }",
+  "    }",
+  "    document.getElementById('settings').addEventListener('submit',saveSettings);",
+  "    document.getElementById('campaign').addEventListener('submit',createCampaign);",
+  "    loadSettings(); loadLogs();",
+  "  </script>",
+  "</body>",
+  "</html>",
+].join("\n");
 
-    <div class="grid">
-      <div class="card">
-        <h3>Settings</h3>
-        <form id="settings">
-          <div class="row">
-            <div>
-              <label>Revenue account code</label>
-              <input name="revenueCode" required>
-            </div>
-            <div>
-              <label>Media cost account code</label>
-              <input name="costCode" required>
-            </div>
-          </div>
-          <div class="row">
-            <div>
-              <label>Accrual control account code</label>
-              <input name="accrualCode" required>
-            </div>
-            <div>
-              <label>Sales VAT name (as in Xero)</label>
-              <input name="salesTaxName" required>
-            </div>
-          </div>
-          <div style="margin:8px 0;">
-            <label><input type="checkbox" name="autoApproveBills"> Auto-approve supplier bills after recoding</label>
-          </div>
-          <button class="btn" type="submit">Save settings</button>
-          <div id="sOut" class="muted" style="margin-top:8px;"></div>
-        </form>
-      </div>
+app.get("/app", (_req, res) => res.type("html").send(appHtml));
+app.get("/api/logs", (_req, res) => res.json(mem.recent));
 
-      <div class="card">
-        <h3>Create Campaign</h3>
-        <form id="campaign">
-          <label>Client name</label>
-          <input name="clientContactName" placeholder="Acme Marketing" required>
-          <label>Campaign ref (will also be used as bill Reference)</label>
-          <input name="campaignRef" placeholder="SEPT-PAID-SOCIAL" required>
-          <div class="row">
-            <div>
-              <label>Sale (net)</label>
-              <input name="saleNet" type="number" step="0.01" value="10000" required>
-            </div>
-            <div>
-              <label>Expected cost (net)</label>
-              <input name="expectedCostNet" type="number" step="0.01" value="8000" required>
-            </div>
-          </div>
-          <div class="row">
-            <div>
-              <label>Due date (YYYY-MM-DD)</label>
-              <input name="dueDate" placeholder="2025-09-30">
-            </div>
-            <div>
-              <label>Description</label>
-              <input name="description" placeholder="September social ads">
-            </div>
-          </div>
-          <button class="btn" type="submit">Create campaign</button>
-          <pre id="cOut" class="muted" style="margin-top:8px;"></pre>
-        </form>
-        <div class="muted" style="margin-top:8px;">
-          Tip: when supplier bills arrive, put the same text in the <strong>Reference</strong> field
-          (e.g. <em>SEPT-PAID-SOCIAL</em>). The plugin will recode and handle variances.
-        </div>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:16px;">
-      <h3>Recent activity</h3>
-      <ul class="logs" id="logs"></ul>
-    </div>
-  </div>
-  <script>
-    async function loadSettings() {
-      const r = await fetch('/api/settings'); const s = await r.json();
-      const f = document.getElementById('settings');
-      (f.querySelector('[name="revenueCode"]')).value = s.revenueCode;
-      (f.querySelector('[name="costCode"]')).value = s.costCode;
-      (f.querySelector('[name="accrualCode"]')).value = s.accrualCode;
-      (f.querySelector('[name="salesTaxName"]')).value = s.salesTaxName;
-      (f.querySelector('[name="autoApproveBills"]')).checked = !!s.autoApproveBills;
-    }
-    async function saveSettings(e) {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const data = Object.fromEntries(fd.entries());
-      data.autoApproveBills = String(fd.get('autoApproveBills') !== null);
-      const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data) });
-      document.getElementById('sOut').textContent = r.ok ? 'Settings saved.' : 'Save failed.';
-      loadLogs();
-    }
-    async function createCampaign(e) {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const data = Object.fromEntries(fd.entries());
-      data.saleNet = Number(data.saleNet);
-      data.expectedCostNet = Number(data.expectedCostNet);
-      const r = await fetch('/campaigns', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data) });
-      const txt = await r.text();
-      document.getElementById('cOut').textContent = txt;
-      loadLogs();
-    }
-    async function loadLogs() {
-      const r = await fetch('/api/logs'); const items = await r.json();
-      const ul = document.getElementById('logs'); ul.innerHTML = '';
-      for (const it of items) {
-        const li = document.createElement('li');
-        li.innerHTML = '<span class=\"'+(it.kind)+'\">['+it.kind.toUpperCase()+']</span> '+new Date(it.ts).toLocaleString()+' — '+it.msg;
-        ul.appendChild(li);
-      }
-    }
-    document.getElementById('settings').addEventListener('submit', saveSettings);
-    document.getElementById('campaign').addEventListener('submit', createCampaign);
-    loadSettings(); loadLogs();
-  </script>
-</body>
-</html>`;
-app.get("/ap
+/** -----------------------------
+ * Boot server
+ * ------------------------------*/
+const port = Number(process.env.PORT || 3000);
+app.listen(port, () =>
+  console.log(`Media Accrual Plug-in listening on ${port}`)
+);
