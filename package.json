@@ -20,6 +20,8 @@
     "@types/node": "^20.14.10",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": "20.x"
   }
 }
-"engines": { "node": "20.x" }
