@@ -10,21 +10,21 @@ import { XeroClient } from 'xero-node'
 const mem = {
   tenantId: '' as string,
   tokenInitialised: false,
-  accrualByCampaign: new Map<string, number>()
+  accrualByCampaign: new Map<string, number>(),
 }
 
 const scopes = [
   'offline_access',
   'accounting.settings',
   'accounting.transactions',
-  'accounting.contacts'
+  'accounting.contacts',
 ]
 
 const xero = new XeroClient({
   clientId: process.env.XERO_CLIENT_ID!,
   clientSecret: process.env.XERO_CLIENT_SECRET!,
   redirectUris: [process.env.XERO_REDIRECT_URI!],
-  scopes
+  scopes,
 })
 
 async function requireTenant() {
@@ -39,7 +39,7 @@ async function requireTenant() {
 
 const app = express()
 
-// Capture raw body for webhook signature validation
+// Raw body for webhook signature validation
 app.use('/webhooks/xero', bodyParser.raw({ type: '*/*' }))
 app.use(bodyParser.json())
 
@@ -59,7 +59,7 @@ app.get('/callback', async (req, res) => {
   res.send('Connected to Xero. You can now POST /campaigns')
 })
 
-// Utility: find tax rate by name
+// Utility: find tax rate by name (optional)
 async function findTaxRateByName(name?: string) {
   if (!name) return undefined
   const tenantId = await requireTenant()
@@ -68,53 +68,12 @@ async function findTaxRateByName(name?: string) {
   return rates.find(r => r.name?.toLowerCase() === name.toLowerCase())
 }
 
-// Utility: ensure accounts exist
-async function upsertAccount(code: string, name: string, type: 'REVENUE'|'EXPENSE'|'CURRLIAB', taxName?: string) {
-  const tenantId = await requireTenant()
-  const api = xero.accountingApi
-  const existing = await api.getAccounts(tenantId)
-  const found = existing.body.accounts?.find(a => a.code === code)
-  if (found) return found
-  const account: any = { code, name, type, enablePaymentsToAccount: false }
-  if (taxName) {
-    const tax = await findTaxRateByName(taxName)
-    if (tax?.taxType) account.taxType = tax.taxType
-  }
-  const created = await api.createAccount(tenantId, { accounts: [account] })
-  return created.body.accounts?.[0]
-}
-
-async function ensureCoreSetup() {
-  await upsertAccount(process.env.MEDIA_REVENUE_CODE!, 'Media Revenue', 'REVENUE', process.env.SALES_TAX_NAME)
-  await upsertAccount(process.env.MEDIA_COST_CODE!, 'Media Costs', 'EXPENSE', process.env.PURCHASE_TAX_NAME)
-  await upsertAccount(process.env.MEDIA_ACCRUAL_CONTROL_CODE!, 'Media Accrual Control', 'CURRLIAB')
-}
-
-// Utility: ensure tracking category + option exists
-async function ensureCampaignTracking(campaignRef: string) {
-  const tenantId = await requireTenant()
-  const api = xero.accountingApi
-  const cats = await api.getTrackingCategories(tenantId)
-  let campaignCat = cats.body.trackingCategories?.find(c => c.name === 'Campaign' && c.status === 'ACTIVE')
-  if (!campaignCat) {
-    const created = await api.createTrackingCategory(tenantId, { trackingCategories: [{ name: 'Campaign' }] })
-    campaignCat = created.body.trackingCategories?.[0]
-  }
-  const opt = campaignCat?.options?.find(o => o.name === campaignRef && o.status === 'ACTIVE')
-  if (!opt) {
-    const createdOpt = await api.createTrackingOptions(tenantId, campaignCat!.trackingCategoryID!, { trackingOptions: [{ name: campaignRef }] })
-    return { category: campaignCat!, option: createdOpt.body.options?.[0] }
-  }
-  return { category: campaignCat!, option: opt }
-}
-
 // ------------------
-// POST /campaigns
+// POST /campaigns  -> creates sales invoice + accrual journal
 // ------------------
 app.post('/campaigns', async (req, res) => {
   try {
     const tenantId = await requireTenant()
-    await ensureCoreSetup()
 
     const {
       clientContactId,
@@ -124,67 +83,81 @@ app.post('/campaigns', async (req, res) => {
       expectedCostNet,
       dueDate,
       description,
-      salesTaxName = process.env.SALES_TAX_NAME
+      salesTaxName = process.env.SALES_TAX_NAME,
     } = req.body
 
     if (!campaignRef || saleNet == null || expectedCostNet == null || (!clientContactId && !clientContactName)) {
       return res.status(400).json({ error: 'Required: campaignRef, saleNet, expectedCostNet, clientContactId or clientContactName' })
     }
 
-    const { category, option } = await ensureCampaignTracking(campaignRef)
+    // Ensure contact
     let contactId = clientContactId as string
     if (!contactId) {
-      const newContact = await xero.accountingApi.createContacts(tenantId, { contacts: [{ name: clientContactName }] })
+      const newContact = await xero.accountingApi.createContacts(tenantId, { contacts: [{ name: clientContactName }] as any })
       contactId = newContact.body.contacts?.[0]?.contactID as string
     }
-    const tracking = [{ trackingCategoryID: category.trackingCategoryID!, name: 'Campaign', option: option?.name || campaignRef }]
 
-    // Sales invoice
+    // Sales invoice (authorised)
     const line: any = {
       description: description || `Media campaign ${campaignRef}`,
       quantity: 1,
-      unitAmount: saleNet,
+      unitAmount: Number(saleNet),
       accountCode: process.env.MEDIA_REVENUE_CODE!,
-      tracking
     }
     if (salesTaxName) {
       const tax = await findTaxRateByName(salesTaxName)
       if (tax?.taxType) line.taxType = tax.taxType
     }
+
     const invResp = await xero.accountingApi.createInvoices(tenantId, {
-      invoices: [{
-        type: 'ACCREC',
-        contact: { contactID: contactId },
-        date: new Date().toISOString().slice(0,10),
-        dueDate,
-        status: 'AUTHORISED',
-        reference: campaignRef,
-        lineItems: [line]
-      }]
+      invoices: [
+        {
+          type: 'ACCREC',
+          contact: { contactID: contactId },
+          date: new Date().toISOString().slice(0, 10),
+          dueDate,
+          status: 'AUTHORISED',
+          reference: campaignRef,
+          lineItems: [line],
+        } as any,
+      ],
     })
     const createdInvoice = invResp.body.invoices?.[0]
 
-    // Manual journal for accrual
+    // Manual journal for accrual (Dr Media Costs, Cr Accrual Control) — no VAT on journals
     await xero.accountingApi.createManualJournals(tenantId, {
-      manualJournals: [{
-        narration: `Accrue expected media cost for ${campaignRef}`,
-        date: new Date().toISOString().slice(0,10),
-        lineAmountTypes: 'Exclusive',
-        journalLines: [
-          { accountCode: process.env.MEDIA_COST_CODE!, lineAmount: Number(expectedCostNet), description: `Accrued cost ${campaignRef}`, tracking },
-          { accountCode: process.env.MEDIA_ACCRUAL_CONTROL_CODE!, lineAmount: -Number(expectedCostNet), description: `Accrued cost ${campaignRef}`, tracking }
-        ]
-      }]
+      manualJournals: [
+        {
+          narration: `Accrue expected media cost for ${campaignRef}`,
+          date: new Date().toISOString().slice(0, 10),
+          lineAmountTypes: 'Exclusive' as any,
+          journalLines: [
+            {
+              accountCode: process.env.MEDIA_COST_CODE!,
+              lineAmount: Number(expectedCostNet),
+              description: `Accrued cost ${campaignRef}`,
+            },
+            {
+              accountCode: process.env.MEDIA_ACCRUAL_CONTROL_CODE!,
+              lineAmount: -Number(expectedCostNet),
+              description: `Accrued cost ${campaignRef}`,
+            },
+          ],
+        } as any,
+      ],
     })
 
-    mem.accrualByCampaign.set(campaignRef, (mem.accrualByCampaign.get(campaignRef) || 0) + Number(expectedCostNet))
+    mem.accrualByCampaign.set(
+      campaignRef,
+      (mem.accrualByCampaign.get(campaignRef) || 0) + Number(expectedCostNet)
+    )
 
     res.json({
       ok: true,
       invoiceNumber: createdInvoice?.invoiceNumber,
       invoiceId: createdInvoice?.invoiceID,
       campaignRef,
-      accrued: expectedCostNet
+      accrued: expectedCostNet,
     })
   } catch (err: any) {
     console.error(err)
@@ -219,57 +192,67 @@ app.post('/webhooks/xero', async (req: any, res) => {
 
     for (const ev of json.events || []) {
       if (ev.resourceType !== 'INVOICE') continue
+
       const invoiceId = ev.resourceId
       const invResp = await xero.accountingApi.getInvoice(tenantId, invoiceId)
-      const inv = invResp.body.invoices?.[0]
+      const inv: any = invResp.body.invoices?.[0]
       if (!inv) continue
-      if (inv.type !== 'ACCPAY') continue
-      if (!['DRAFT','SUBMITTED'].includes(String(inv.status))) continue
 
-      const campaignRef = inv.reference || inv.lineItems?.[0]?.tracking?.find((t:any) => t.name === 'Campaign')?.option
+      // Only supplier bills (ACCPAY) and only if editable
+      if (inv.type !== 'ACCPAY') continue
+      const status = String(inv.status || '')
+      if (!(status === 'DRAFT' || status === 'SUBMITTED')) continue
+
+      // CampaignRef taken from invoice.reference (keep it simple)
+      const campaignRef = inv.reference || ''
       if (!campaignRef) continue
 
-      const { category, option } = await ensureCampaignTracking(campaignRef)
-      const tracking = [{ trackingCategoryID: category.trackingCategoryID!, name: 'Campaign', option: option?.name || campaignRef }]
+      // Recode all lines to Accrual Control (VAT stays as per bill line taxType)
       const accrualCode = process.env.MEDIA_ACCRUAL_CONTROL_CODE!
-
-      const newLines = (inv.lineItems || []).map((li:any) => ({
+      const newLines = (inv.lineItems || []).map((li: any) => ({
         description: li.description,
         quantity: li.quantity,
         unitAmount: li.unitAmount,
         accountCode: accrualCode,
         taxType: li.taxType,
-        tracking
       }))
 
-      await xero.accountingApi.updateInvoice(tenantId, invoiceId, { invoices: [{ lineItems: newLines }] })
+      await xero.accountingApi.updateInvoice(tenantId, invoiceId, { invoices: [{ lineItems: newLines } as any] })
 
       if ((process.env.AUTO_APPROVE_BILLS || 'true').toLowerCase() === 'true') {
-        await xero.accountingApi.updateInvoice(tenantId, invoiceId, { invoices: [{ status: 'AUTHORISED' }] })
+        await xero.accountingApi.updateInvoice(tenantId, invoiceId, { invoices: [{ status: 'AUTHORISED' } as any] })
       }
 
-      const netBill = (newLines || []).reduce((s:number, l:any) => s + Number(l.unitAmount || 0) * Number(l.quantity || 1), 0)
+      // Variance vs accrual
+      const netBill = (newLines || []).reduce(
+        (s: number, l: any) => s + Number(l.unitAmount || 0) * Number(l.quantity || 1),
+        0
+      )
       const accrued = mem.accrualByCampaign.get(campaignRef) || 0
       const variance = Number((netBill - accrued).toFixed(2))
 
       if (variance !== 0) {
         const costCode = process.env.MEDIA_COST_CODE!
-        const jl = variance > 0
-          ? [
-              { accountCode: costCode, lineAmount: Math.abs(variance), description: `Accrual variance ${campaignRef}`, tracking },
-              { accountCode: accrualCode, lineAmount: -Math.abs(variance), description: `Accrual variance ${campaignRef}`, tracking }
-            ]
-          : [
-              { accountCode: accrualCode, lineAmount: Math.abs(variance), description: `Accrual release ${campaignRef}`, tracking },
-              { accountCode: costCode, lineAmount: -Math.abs(variance), description: `Accrual release ${campaignRef}`, tracking }
-            ]
+        const jl =
+          variance > 0
+            ? [
+                { accountCode: costCode, lineAmount: Math.abs(variance), description: `Accrual variance ${campaignRef}` },
+                { accountCode: accrualCode, lineAmount: -Math.abs(variance), description: `Accrual variance ${campaignRef}` },
+              ]
+            : [
+                { accountCode: accrualCode, lineAmount: Math.abs(variance), description: `Accrual release ${campaignRef}` },
+                { accountCode: costCode, lineAmount: -Math.abs(variance), description: `Accrual release ${campaignRef}` },
+              ]
+
         await xero.accountingApi.createManualJournals(tenantId, {
-          manualJournals: [{
-            narration: `Accrual variance for ${campaignRef}`,
-            date: new Date().toISOString().slice(0,10),
-            lineAmountTypes: 'Exclusive',
-            journalLines: jl
-          }]
+          manualJournals: [
+            {
+              narration: `Accrual variance for ${campaignRef}`,
+              date: new Date().toISOString().slice(0, 10),
+              lineAmountTypes: 'Exclusive' as any,
+              journalLines: jl as any,
+            } as any,
+          ],
         })
       }
     }
